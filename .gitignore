@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Build artifacts (regenerate with: python -m build)
+build/
+dist/
+
+# Local/private inputs and OCR outputs -- must never be published.
+# (These were committed once; the screenshots include account IDs and
+#  activity pages, and the xlsx files are OCR results.)
+*.jpg
+*.png
+test_result.xlsx
+test2_result.xlsx
+.~*.xlsx
+
+# Packaged skill bundles (the source lives in bank-promo-extractor/)
+*.skill
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
