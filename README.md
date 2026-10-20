@@ -54,6 +54,33 @@ Regenerate the 别称 table after editing the workbook:
 python scripts/build_bank_aliases.py ~/Documents/balance.xlsx
 ```
 
+## 补丁机制（patches.txt）
+
+`data/bank_region_codes.json` 是生成文件，不手改；补充或修正条目写进补丁文件
+`data/patches.txt`，加载时叠加在 JSON 之上。每行一条三元组，`#` 之后为备注：
+
+```
+农行 407 亳州 # 261020点询亳州分行营业部确认
+```
+
+- 银行可写规范名或别称（`农行` / `abc`），按上面的匹配规则解析成唯一规范名；
+- 地区码按数据约定原样书写（注意补零；支持 `萧山227` 这类带汉字前缀的写法）；
+- 地区按书写原样存储；
+- `#` 备注只留在补丁文件里，**不进入工具数据与任何输出**（含 `export`）；
+- 补丁可以新增映射，也可以覆盖错误映射（覆盖时在 stderr 打警告）；同一地区
+  多个码沿用逗号拼接约定（`032,萧山227,999`）。
+
+审计与显式指定补丁文件：
+
+```bash
+bank-query list patches                        # 查看已应用的补丁条目（无备注）
+bank-query --patch-file /path/to/patches.txt list patches
+```
+
+默认查找顺序：自定义数据文件（`-d`）所在目录的 `patches.txt`，否则用包内
+`data/patches.txt`。坏行（字段数不是 3）或银行名解析不唯一时，该行跳过并在
+stderr 警告，不致命。
+
 ## Python API
 
 ```python
@@ -81,6 +108,12 @@ print(result.data)  # {"中国农业银行": "001", ...}
 # List all banks
 banks = query.list_banks()
 print(banks)  # ["中国农业银行", ...]
+
+# Use an explicit patch file instead of the default lookup
+query = BankRegionQuery(patch_file="patches.txt")
+
+# List applied patch entries (no '# ...' notes -- those stay in the file)
+query.list_patches().data  # [{"bank": "中国农业银行", "code": "407", "region": "亳州"}, ...]
 
 # Get statistics
 stats = query.get_statistics()
@@ -122,6 +155,9 @@ bank-query list regions -b "中国农业银行"
 # List codes for a bank
 bank-query list codes -b "中国农业银行"
 
+# List applied patch entries (补丁)
+bank-query list patches
+
 # Show statistics
 bank-query stats
 
@@ -131,8 +167,8 @@ bank-query export -o output.json
 # Interactive mode
 bank-query interactive
 
-# JSON output
-bank-query code -b "中国农业银行" -r "北京市" -f json
+# JSON output (-f is a global option and goes before the subcommand)
+bank-query -f json code -b "中国农业银行" -r "北京市"
 ```
 
 # License

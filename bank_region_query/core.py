@@ -4,6 +4,7 @@ Core query functionality for bank region codes
 
 import json
 import re
+import sys
 import unicodedata
 from typing import Dict, List, Optional, Union, Tuple, Any
 from pathlib import Path
@@ -44,6 +45,8 @@ class BankRegionQuery:
     - Pattern matching: exact, substring, wildcard (*), regex
     - List all banks, regions, codes
     - Bank name matching: canonical name, 简称, pinyin abbreviation
+    - Patch layer (data/patches.txt): add or override mappings on top of the
+      JSON without editing it; '# ...' notes stay in the patch file
 
     Pattern Rules:
     - Default: substring match (e.g., "东营" matches any region containing "东营")
@@ -63,12 +66,15 @@ class BankRegionQuery:
     as a menu in interactive mode.
     """
     
-    def __init__(self, data_file: Optional[str] = None):
+    def __init__(self, data_file: Optional[str] = None, patch_file: Optional[str] = None):
         """
         Initialize the query tool
-        
+
         Args:
             data_file: Path to JSON data file. If None, uses bundled data
+            patch_file: Path to a patch file (银行 地区码 地区 per line, '#'
+                comments). If None, patches.txt next to the data file in use is
+                preferred, falling back to the bundled one.
         """
         if data_file is None:
             # Use bundled data
@@ -86,8 +92,28 @@ class BankRegionQuery:
             Path(__file__).parent / "data" / self.ALIAS_FILE,
         ]
 
+        # Patches layer on top of the data file the same way: one shipped
+        # next to the data file in use, else the bundled one. An explicit
+        # patch_file replaces the lookup entirely.
+        if patch_file is not None:
+            self._patch_paths = [Path(patch_file)]
+        else:
+            self._patch_paths = [
+                data_path.parent / self.PATCH_FILE,
+                Path(__file__).parent / "data" / self.PATCH_FILE,
+            ]
+        self._patch_explicit = patch_file is not None
+
         with open(data_path, 'r', encoding='utf-8') as f:
             self.data = json.load(f)
+
+        # Patch application needs bank-name matching, which needs bank_list
+        # and the match strings normally built inside _build_index -- so build
+        # them first, patch, then let _build_index rebuild everything over the
+        # patched data.
+        self.bank_list = list(self.data.keys())
+        self._build_bank_match_strings()
+        self._apply_patches()
 
         self._build_index()
 
@@ -122,6 +148,7 @@ class BankRegionQuery:
     #                            one, script callers must re-query
 
     ALIAS_FILE = "bank_aliases.json"
+    PATCH_FILE = "patches.txt"
     MAX_CHOICES = 3
 
     # CJK Unified Ideographs (+ Extension A); every bank name is written in it.
@@ -182,6 +209,96 @@ class BankRegionQuery:
                 normalized = self._normalize_bank_name(alias)
                 if normalized and normalized not in bucket:
                     bucket.append(normalized)
+
+    def _find_patch_file(self) -> Optional[Path]:
+        """The first existing patch file among _patch_paths, or None."""
+        for path in self._patch_paths:
+            if path.is_file():
+                return path
+        return None
+
+    def _apply_patches(self):
+        """Overlay the patch file on top of the loaded data.
+
+        Each non-comment line is '银行 地区码 地区', optionally followed by a
+        '# ...' note. Notes live in the patch file only -- they are stripped
+        here and never reach self.data, so no query or export can surface
+        them. The bank token resolves through the usual name/别称 matching; a
+        bank that does not resolve to exactly one bank, or a line without
+        exactly three fields, is reported on stderr and skipped rather than
+        fatal (like a missing alias file). A patch may add a mapping or
+        override a wrong one; an override prints a warning so silent data
+        changes stand out."""
+        self._patches = []
+        path = self._find_patch_file()
+        if path is None:
+            if self._patch_explicit:
+                print(f"Warning: patch file {self._patch_paths[0]} not found, "
+                      f"no patches applied", file=sys.stderr)
+            return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except OSError as e:
+            print(f"Warning: cannot read patch file {path}: {e}", file=sys.stderr)
+            return
+
+        for lineno, raw in enumerate(lines, 1):
+            content = raw.split('#', 1)[0].strip()
+            if not content:
+                continue  # blank line or comment-only line
+            fields = content.split()
+            if len(fields) != 3:
+                print(f"Warning: {path}:{lineno}: expected '银行 地区码 地区', "
+                      f"skipped: {content}", file=sys.stderr)
+                continue
+            bank_input, code, region = fields
+            canonical = self.resolve_bank_name(bank_input)
+            if canonical is None:
+                print(f"Warning: {path}:{lineno}: bank '{bank_input}' does not "
+                      f"resolve to exactly one bank, skipped", file=sys.stderr)
+                continue
+            self._patch_one(canonical, code, region)
+
+    def _patch_one(self, canonical: str, code: str, region: str):
+        """Apply one patch: set code_to_region[code] = region and keep
+        region_to_code in sync (comma-joined multi-code convention). Only the
+        entries named by the patch are touched; everything else keeps its
+        original order."""
+        bank = self.data[canonical]
+        code_to_region = bank.setdefault("code_to_region", {})
+        region_to_code = bank.setdefault("region_to_code", {})
+
+        old_region = code_to_region.get(code)
+        if old_region is not None and old_region != region:
+            print(f"Warning: patch overrides {canonical} code {code}: "
+                  f"'{old_region}' -> '{region}'", file=sys.stderr)
+            self._remove_code_from_region(region_to_code, old_region, code)
+        code_to_region[code] = region
+
+        codes = region_to_code.get(region)
+        if codes is None:
+            region_to_code[region] = code
+        else:
+            parts = codes.split(',')
+            if code not in parts:
+                parts.append(code)
+                region_to_code[region] = ','.join(parts)
+
+        self._patches.append({"bank": canonical, "code": code, "region": region})
+
+    @staticmethod
+    def _remove_code_from_region(region_to_code: Dict[str, str], region: str, code: str):
+        """Drop one code from a region's comma-joined code list; drop the
+        region too if no code is left."""
+        codes = region_to_code.get(region)
+        if codes is None:
+            return
+        parts = [c for c in codes.split(',') if c != code]
+        if parts:
+            region_to_code[region] = ','.join(parts)
+        else:
+            del region_to_code[region]
 
     def match_banks(self, bank_name: str) -> List[str]:
         """Banks whose name or 别称 matches the input, in data-file order.
@@ -312,6 +429,11 @@ class BankRegionQuery:
         if canonical is None:
             return QueryResult(success=False, data=None, message=error)
         return QueryResult(success=True, data=table.get(canonical, []))
+
+    def list_patches(self) -> QueryResult:
+        """List applied patch entries (bank, code, region) -- without the
+        '# ...' notes, which stay in the patch file."""
+        return QueryResult(success=True, data=self._patches.copy())
 
     def _detect_pattern_type(self, pattern: str) -> str:
         """
@@ -782,6 +904,7 @@ class BankRegionQuery:
             "total_banks": len(self.bank_list),
             "total_region_mappings": total_regions,
             "total_code_mappings": total_codes,
+            "total_patches": len(self._patches),
             "banks": self.bank_list
         }
     

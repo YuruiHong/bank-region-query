@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="bank-region-query",
-    version="1.2.0",
+    version="1.3.0",
     author="Yurui Hong",
     author_email="yuruihong02@outlook.com",
     description="A tool to query bank region codes",
@@ -14,7 +14,7 @@ setup(
     url="https://github.com/YuruiHong/bank-region-query",
     packages=find_packages(include=['bank_region_query', 'bank_region_query.*']),  # Fixed: include all subpackages
     package_data={
-        "bank_region_query": ["data/*.json"],
+        "bank_region_query": ["data/*.json", "data/*.txt"],
     },
     include_package_data=True,
     classifiers=[

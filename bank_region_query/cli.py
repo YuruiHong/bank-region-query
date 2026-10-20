@@ -111,6 +111,13 @@ Pattern Matching Examples:
         "-d", "--data-file",
         help="Path to custom JSON data file (default: use bundled data)"
     )
+
+    parser.add_argument(
+        "--patch-file",
+        help="Path to a patch file: '银行 地区码 地区' per line, '# ...' notes "
+             "stay in the file (default: patches.txt next to the data file, "
+             "else the bundled one)"
+    )
     
     parser.add_argument(
         "-f", "--format",
@@ -147,7 +154,7 @@ Pattern Matching Examples:
     list_parser = subparsers.add_parser("list", help="List banks, regions, or codes")
     list_parser.add_argument(
         "type",
-        choices=["banks", "regions", "codes", "aliases"],
+        choices=["banks", "regions", "codes", "aliases", "patches"],
         help="What to list"
     )
     list_parser.add_argument("-b", "--bank", help="Bank name (required for regions/codes)")
@@ -178,7 +185,10 @@ Pattern Matching Examples:
     
     try:
         # Initialize query tool
-        query = BankRegionQuery(args.data_file if hasattr(args, 'data_file') else None)
+        query = BankRegionQuery(
+            args.data_file if hasattr(args, 'data_file') else None,
+            args.patch_file if hasattr(args, 'patch_file') else None,
+        )
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -260,6 +270,14 @@ Pattern Matching Examples:
                 print("\n🏷  Known bank aliases:")
                 for bank, aliases in result.data.items():
                     print(f"  • {bank}: {', '.join(aliases) if aliases else '(none)'}")
+        elif args.type == "patches":
+            result = query.list_patches()
+            if result.data:
+                print(f"\n🩹 Patched entries ({len(result.data)}):")
+                for p in result.data:
+                    print(f"  • {p['bank']} → {p['code']} → {p['region']}")
+            else:
+                print("\n🩹 No patches applied")
 
     elif args.command == "resolve":
         result = query.resolve_bank(args.bank)
@@ -275,6 +293,7 @@ Pattern Matching Examples:
         print(f"  • Total banks: {stats['total_banks']}")
         print(f"  • Total region mappings: {stats['total_region_mappings']}")
         print(f"  • Total code mappings: {stats['total_code_mappings']}")
+        print(f"  • Patched entries: {stats['total_patches']}")
         print(f"\n  Banks:")
         for bank in stats['banks']:
             print(f"    - {bank}")
@@ -298,6 +317,7 @@ Pattern Matching Examples:
         print("  list regions <bank> [pattern]     - List regions for bank (optional filter)")
         print("  list codes <bank> [pattern]       - List codes for bank (optional filter)")
         print("  list aliases [bank]               - List known bank aliases")
+        print("  list patches                      - List applied patch entries")
         print("  resolve <bank>                    - Resolve an alias to the canonical name")
         print("  stats                             - Show statistics")
         print("  help                              - Show this help")
@@ -331,6 +351,7 @@ Pattern Matching Examples:
                     print("  list regions <bank> [pattern]     - List regions (optional filter)")
                     print("  list codes <bank> [pattern]       - List codes (optional filter)")
                     print("  list aliases [bank]               - List known bank aliases")
+                    print("  list patches                      - List applied patch entries")
                     print("  resolve <bank>                    - Resolve an alias to the canonical name")
                     print("  stats                             - Show statistics")
                     print("  help                              - Show this help")
@@ -370,6 +391,14 @@ Pattern Matching Examples:
                     print(f"\nAvailable banks ({len(banks)}):")
                     for bank in banks:
                         print(f"  • {bank}")
+                elif cmd == "list patches":
+                    patches = query.list_patches().data
+                    if patches:
+                        print(f"\nPatched entries ({len(patches)}):")
+                        for p in patches:
+                            print(f"  • {p['bank']} → {p['code']} → {p['region']}")
+                    else:
+                        print("\nNo patches applied")
                 elif cmd.startswith("list aliases"):
                     parts = cmd.split(maxsplit=2)
                     bank = parts[2].strip() if len(parts) > 2 else None
